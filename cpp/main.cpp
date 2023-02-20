@@ -105,10 +105,15 @@ void test_topic_client_mock() {
   auto &client = dataSource.client();
   auto &topic = client.getTopicEntryPoint("Foo");
   MarketDataMessage msg;
+  msg.id = 1;
   topic.sowBegin();
   topic.sowEntry(msg);
   topic.sowEnd();
+  msg.id = 2;
   topic.realtime(msg);
+  // To match the TopicClient interface.
+  msg.id = 3;
+  client.publish("Foo", msg);
 }
 
 int main() {

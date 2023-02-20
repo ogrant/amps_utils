@@ -898,6 +898,11 @@ class TopicClientMock {
     return builder;
   }
 
+  template <typename MsgT>
+  void publish(std::string const &topic, MsgT const &msg) {
+    getTopicEntryPoint(topic).realtime(msg);
+  }
+
   void unsubscribe(tc::SubscriptionId const &subId) {
     auto const idx = subId.value_.find(':');
     if (std::string::npos == idx) {
