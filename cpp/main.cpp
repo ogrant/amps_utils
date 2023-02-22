@@ -1,21 +1,14 @@
+#include "MarketDataMessage.hpp"
 #include "TopicClient.hpp"
 
 #include <iostream>
 
-/**
- * @brief Dummy market data message.
- *
- */
-struct MarketDataMessage {
-  int id{};
-  double price{};
-  int quantity{};
+using Test = MsgPackSerializerFor<MarketDataMessage>;
+using Test2 = MsgPackSerializerFor<MarketDataMessage const &>;
 
-  friend std::ostream &operator<<(std::ostream &os, MarketDataMessage const &msg) {
-    os << "id: " << msg.id << ", price: " << msg.price << ", quantity: " << msg.quantity;
-    return os;
-  }
-};
+static constexpr bool kTest = IsMsgPackSerializableV<MarketDataMessage>;
+static constexpr bool kTest2 = IsMsgPackSerializableV<MarketDataMessage const &>;
+static constexpr bool kTest3 = IsMsgPackSerializableV<MsgPackRemoveCR<MarketDataMessage const &>>;
 
 /**
  * @brief Example component that generically uses a data source.
@@ -41,9 +34,7 @@ class MyComponent {
 
   template <typename DataSourceT>
   void unsubscribe(DataSourceT &source) {
-    if (subId_) {
-      source.unsubscribe(subId_);
-    }
+    source.unsubscribe(subId_);
   }
 };
 
@@ -104,19 +95,22 @@ void test_topic_client_mock() {
   // Example test code:
   auto &client = dataSource.client();
   auto &topic = client.getTopicEntryPoint("Foo");
+  std::string const route = "A";
   MarketDataMessage msg;
   msg.id = 1;
   topic.sowBegin();
-  topic.sowEntry(msg);
+  topic.sowEntry(msg, route);
   topic.sowEnd();
   msg.id = 2;
-  topic.realtime(msg);
-  // To match the TopicClient interface.
+  topic.realtime(msg, route);
   msg.id = 3;
-  client.publish("Foo", msg);
+  client.publish("Foo", route, msg);
 }
 
 int main() {
+  std::cout << "kTest=" << kTest << std::endl;
+  std::cout << "kTest2=" << kTest2 << std::endl;
+  std::cout << "kTest3=" << kTest3 << std::endl;
   test_topic_client();
   test_topic_client_mock();
   return 0;

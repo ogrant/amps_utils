@@ -1,5 +1,6 @@
 #include "AMPSStubs.hpp"
 #include "FnTraits.hpp"
+#include "RoutingEnvelope.hpp"
 
 #include <experimental/type_traits>
 #include <regex>
@@ -275,7 +276,7 @@ struct MessageTypeResult<TypeList<T>> {
 
 template <typename... OpVT>
 struct MessageTypeImpl {
-  using Step0 = TypeList<typename tc::detail::OpTraits<OpVT>::Type...>;
+  using Step0 = TypeList<typename OpTraits<OpVT>::Type...>;
   using Step1 = Apply<RemoveVoid, Step0>;
   using Step2 = Apply<RemoveDuplicates, Step1>;
   using Type = typename MessageTypeResult<Step2>::Type;
@@ -347,17 +348,6 @@ template <typename T, typename... As>
 constexpr bool SupportsCallV = std::experimental::is_detected_v<detail::SupportsCallHelper, T, As...>;
 
 /**
- * @brief A wrapper around a message that includes a route.
- *
- * @tparam MsgT The type of the wrapped message.
- */
-template <typename MsgT>
-struct RoutingEnvelope {
-  std::string_view route;
-  MsgT msg;
-};
-
-/**
  * @brief A routing envelope used for sending a message to avoid copies.
  * This is only used by the #TopicClient when publishing messages using a route.
  * @tparam MsgT The type of the wrapped message.
@@ -421,15 +411,19 @@ class TopicClientCallback : public Overloaded<OpVT...> {
   template <typename UsedMsgT, typename CbT, typename TagT>
   static void doDispatchMessage(CbT &cb, TagT, AMPS::Message const &msgIn) {
     static_assert(std::is_same_v<UsedMsgT, MsgT> || std::is_same_v<UsedMsgT, RoutingEnvelope<MsgT>>);
-#if 0
-    // TODO: Implement proper deserialization
-    UsedMsgT msgOut;
-    MsgT const &payload = [&msgOut]{ if constexpr (IsRoutingEnvelopeV<UsedMsgT>) { return msgOut.msg; } else { return msgOut; } }();
-    MsgPackDeserializer<UsedMsgT> unpacker{msgOut};
     auto const handle = msgpack::unpack(msgIn.getData().data(), msgIn.getData().len());
+    UsedMsgT msgOut;
+    MsgPackDeserializer<UsedMsgT> unpacker{msgOut};
     handle.get().convert(unpacker);
-#endif
-    MsgT const payload;
+    // FIXME: unpack silently fails if the message is expected to be routed and an unrouted message is received.
+    MsgT const &payload = [&msgOut]() -> MsgT const & {
+      if constexpr (IsRoutingEnvelopeV<UsedMsgT>) {
+        return msgOut.msg;
+      }
+      else {
+        return msgOut;
+      }
+    }();
     if constexpr (SupportsCallV<CbT, TagT, tc::Bookmark const &, MsgT const &>) {
       tc::Bookmark bm;
       // TODO: bm.value_ = msgIn.getBookmark();
@@ -708,7 +702,9 @@ class TopicClient {
    *
    * @param subId The subscription id.
    */
-  void unsubscribe(SubscriptionId const &subId) { client_.unsubscribe(subId.value_); }
+  void unsubscribe(SubscriptionId const &subId) {
+    if (subId) client_.unsubscribe(subId.value_);
+  }
 
   /**
    * @brief Stop all subscriptions.
@@ -740,7 +736,10 @@ class TopicClientMock {
     template <typename MsgT>
     void doEncode(MsgT const &msg, AMPS::Message &msgOut) const {
       msgOut.bookmark_ = client_->doGetBookmark();
-      // TODO: Encode msg into msgOut.buffer_.
+      msgpack::sbuffer buffer;
+      MsgPackSerializer<MsgT> packer{msg};
+      msgpack::pack(buffer, packer);
+      msgOut.buffer_.assign(buffer.data(), buffer.size());
     }
 
     void doDispatch(AMPS::Message const &msg) const {
@@ -795,31 +794,40 @@ class TopicClientMock {
     }
 
     template <typename MsgT>
-    void sowEntry(MsgT const &msg) const {
+    void sowEntry(MsgT const &msg, std::string const &route = {}) const {
       AMPS::Message msgOut;
       msgOut.cmd_ = AMPS::Message::Command::SOW;
-      doEncode(msg, msgOut);
+      if (route.empty())
+        doEncode(msg, msgOut);
+      else
+        doEncode(OutboundRoutingEnvelope<MsgT>{route, msg}, msgOut);
       doDispatch(msgOut);
     }
 
     template <typename MsgT>
-    void sowDelete(MsgT const &msg) const {
+    void sowDelete(MsgT const &msg, std::string const &route = {}) const {
       AMPS::Message msgOut;
       msgOut.cmd_ = AMPS::Message::Command::OOF;
-      doEncode(msg, msgOut);
+      if (route.empty())
+        doEncode(msg, msgOut);
+      else
+        doEncode(OutboundRoutingEnvelope<MsgT>{route, msg}, msgOut);
       doDispatch(msgOut);
     }
 
     template <typename MsgT>
-    void realtime(MsgT const &msg) const {
+    void realtime(MsgT const &msg, std::string const &route = {}) const {
       AMPS::Message msgOut;
       msgOut.cmd_ = AMPS::Message::Command::Publish;
-      doEncode(msg, msgOut);
+      if (route.empty())
+        doEncode(msg, msgOut);
+      else
+        doEncode(OutboundRoutingEnvelope<MsgT>{route, msg}, msgOut);
       doDispatch(msgOut);
     }
   };
 
-  std::uint64_t mutable bookmark_;
+  std::uint64_t mutable bookmark_{0};
   std::unordered_map<std::string, TopicInfo> topics_;
 
   class SubscriptionBuilder {
@@ -903,7 +911,13 @@ class TopicClientMock {
     getTopicEntryPoint(topic).realtime(msg);
   }
 
-  void unsubscribe(tc::SubscriptionId const &subId) {
+  template <typename MsgT>
+  void publish(std::string const &topic, std::string const &route, MsgT const &msg) {
+    getTopicEntryPoint(topic).realtime(msg, route);
+  }
+
+  void unsubscribe(SubscriptionId const &subId) {
+    if (not subId) return;
     auto const idx = subId.value_.find(':');
     if (std::string::npos == idx) {
       throw std::runtime_error("Invalid subscription subId: " + subId.value_);
