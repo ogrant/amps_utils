@@ -48,8 +48,8 @@ struct Realtime {};
  *
  */
 class Bookmark {
-  friend class TopicClient;
-  friend class TopicClientMock;
+  template <typename MsgT, bool UseEnvelopeNT, typename... OpVT>
+  friend class TopicClientCallback;
   std::string value_;
 
  public:
@@ -426,7 +426,7 @@ class TopicClientCallback : public Overloaded<OpVT...> {
     }();
     if constexpr (SupportsCallV<CbT, TagT, tc::Bookmark const &, MsgT const &>) {
       tc::Bookmark bm;
-      // TODO: bm.value_ = msgIn.getBookmark();
+      bm.value_ = msgIn.getBookmark();
       cb(TagT{}, bm, payload);
     }
     else if constexpr (SupportsCallV<CbT, TagT, MsgT const &>) {
@@ -434,7 +434,7 @@ class TopicClientCallback : public Overloaded<OpVT...> {
     }
     else if constexpr (SupportsCallV<CbT, tc::Bookmark const &, MsgT const &>) {
       tc::Bookmark bm;
-      // TODO: bm.value_ = msgIn.getBookmark();
+      bm.value_ = msgIn.getBookmark();
       cb(bm, payload);
     }
     else if constexpr (SupportsCallV<CbT, MsgT const &>) {
